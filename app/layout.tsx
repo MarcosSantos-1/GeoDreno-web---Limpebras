@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GeoDreno — Inventário BL",
+  title: "GeoDreno",
   description: "Painel e exportação do inventário de bueiros",
 };
 

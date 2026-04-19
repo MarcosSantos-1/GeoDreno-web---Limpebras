@@ -104,9 +104,13 @@ export function Navbar() {
           href={authed ? "/" : "/"}
           className="flex items-center gap-2 text-2xl font-bold tracking-tight text-indigo-600 sm:text-3xl dark:text-indigo-400"
         >
-          <span className="select-none" aria-hidden>
-            &#128205;
-          </span>
+          <img
+            src="/GepDreno%20App%20Logo.svg"
+            alt=""
+            width={40}
+            height={40}
+            className="h-8 w-8 shrink-0 object-contain sm:h-9 sm:w-9"
+          />
           <span>GeoDreno</span>
         </Link>
         <ul className="flex items-center gap-2 text-sm font-semibold sm:gap-4">

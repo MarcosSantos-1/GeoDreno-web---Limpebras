@@ -186,7 +186,7 @@ export function DashboardHome({ sectorsTotal }: { sectorsTotal: number }) {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Bueiros registrados</p>
+          <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Pontos registrados</p>
           <p className="mt-2 text-3xl font-bold tabular-nums text-indigo-600 dark:text-indigo-400">
             {bueirosCount === null ? "…" : String(bueirosCount)}
           </p>
