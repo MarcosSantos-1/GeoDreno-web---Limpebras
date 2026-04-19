@@ -2,7 +2,6 @@
 
 import { useAuthWeb } from "@/lib/contexts/AuthWebContext";
 import { useTheme } from "@/lib/contexts/ThemeContext";
-import { AppShell } from "../components/AppShell";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -20,17 +19,17 @@ export default function MapaPage() {
 
   if (!ready || !profile?.nome) {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center">
         <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <AppShell>
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold lg:text-3xl">Mapa dos registros</h1>
-        <p className="mt-1 text-zinc-600 dark:text-zinc-400">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <header className="shrink-0">
+        <h1 className="text-xl font-bold lg:text-2xl">Mapa dos registros</h1>
+        <p className="mt-0.5 text-sm text-zinc-600 dark:text-zinc-400">
           Todos os bueiros registrados pelo app (atualização em tempo real).
         </p>
       </header>
@@ -39,6 +38,6 @@ export default function MapaPage() {
         userId={user?.uid ?? ""}
         displayName={profile?.nome ?? ""}
       />
-    </AppShell>
+    </div>
   );
 }

@@ -108,13 +108,6 @@ function MapInstanceBridge({ mapRef }: { mapRef: React.MutableRefObject<LeafletM
   return null;
 }
 
-function geoErrorMessage(code: number | undefined): string {
-  if (code === 1) return "Permissão de localização negada. Ative em Ajustes › Safari › Localização (ou do site).";
-  if (code === 2) return "Posição indisponível. Tente sair de prédios fechados ou ative Wi‑Fi.";
-  if (code === 3) return "Tempo esgotado ao obter o GPS. Tente de novo em alguns segundos.";
-  return "Não foi possível obter a localização.";
-}
-
 /** `flyTo` costuma falhar em alguns WebKit móveis; `setView` + invalidate é mais estável. */
 function moveMapView(map: LeafletMap, center: [number, number], zoom: number) {
   map.invalidateSize();
@@ -540,279 +533,228 @@ export default function MapaClient({
     );
   }, [withLeafletMap]);
 
-  const flyToMyLocation = useCallback(() => {
-    setMapGeoMsg(null);
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setMapGeoMsg("Geolocalização não disponível neste navegador.");
-      return;
-    }
-    if (typeof window !== "undefined" && window.isSecureContext === false) {
-      setMapGeoMsg("Abra o site com HTTPS (ou use o endereço seguro do servidor) para a localização funcionar.");
-      return;
-    }
-
-    const applyPosition = (pos: GeolocationPosition) => {
-      withLeafletMap(
-        (map) => moveMapView(map, [pos.coords.latitude, pos.coords.longitude], 17),
-        () => setMapGeoMsg("Mapa ainda não carregou. Toque de novo em um instante."),
-      );
-    };
-
-    const onGeoErr = (err: GeolocationPositionError) => {
-      const code = err?.code;
-      if (code === 1) {
-        setMapGeoMsg(geoErrorMessage(code));
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        applyPosition,
-        (err2) => setMapGeoMsg(geoErrorMessage(err2?.code)),
-        { enableHighAccuracy: false, maximumAge: 60_000, timeout: 25_000 },
-      );
-    };
-
-    navigator.geolocation.getCurrentPosition(applyPosition, onGeoErr, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 20_000,
-    });
-  }, [withLeafletMap]);
-
   return (
-    <div className="space-y-4">
-      {notice ? (
-        <p
-          role="status"
-          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100"
-        >
-          {notice}
-        </p>
-      ) : null}
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        {rows.length} pontos registrados
-      </p>
-      {relocateId ? (
-        <p className="rounded-lg border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100">
-          Modo mover: clique no mapa para definir a nova posição do registro selecionado.
-          <button
-            type="button"
-            className="ml-2 font-semibold underline"
-            onClick={() => setRelocateId(null)}
-          >
-            Cancelar
-          </button>
-        </p>
-      ) : null}
-      {addMode && !manualDraft ? (
-        <p className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2 text-xs text-purple-950 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-100">
-          Inclusão manual: clique no mapa na posição do bueiro.
-          <button type="button" className="ml-2 font-semibold underline" onClick={resetManualAdd}>
-            Cancelar
-          </button>
-        </p>
-      ) : null}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
-        <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col gap-2">
-          {mapGeoMsg ? (
-            <p
-              role="status"
-              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
+          <div className="pointer-events-none absolute top-2 right-31 left-2 z-800 flex max-h-[45%] flex-col gap-2 overflow-hidden sm:right-32">
+            {notice ? (
+              <p
+                role="status"
+                className="pointer-events-auto rounded-lg border border-emerald-300 bg-emerald-50/95 px-2.5 py-1.5 text-xs text-emerald-900 shadow-sm backdrop-blur-sm dark:border-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-100"
+              >
+                {notice}
+              </p>
+            ) : null}
+            {relocateId ? (
+              <p className="pointer-events-auto rounded-lg border border-amber-400 bg-amber-50/95 px-2.5 py-1.5 text-[11px] text-amber-900 shadow-sm backdrop-blur-sm dark:border-amber-700 dark:bg-amber-950/90 dark:text-amber-100">
+                Modo mover: clique no mapa para definir a nova posição.
+                <button
+                  type="button"
+                  className="ml-2 font-semibold underline"
+                  onClick={() => setRelocateId(null)}
+                >
+                  Cancelar
+                </button>
+              </p>
+            ) : null}
+            {addMode && !manualDraft ? (
+              <p className="pointer-events-auto rounded-lg border border-purple-300 bg-purple-50/95 px-2.5 py-1.5 text-[11px] text-purple-950 shadow-sm backdrop-blur-sm dark:border-purple-800 dark:bg-purple-950/90 dark:text-purple-100">
+                Inclusão manual: clique no mapa na posição do bueiro.
+                <button type="button" className="ml-2 font-semibold underline" onClick={resetManualAdd}>
+                  Cancelar
+                </button>
+              </p>
+            ) : null}
+            {mapGeoMsg ? (
+              <p
+                role="status"
+                className="pointer-events-auto rounded-lg border border-red-200 bg-red-50/95 px-2.5 py-1.5 text-[11px] font-medium text-red-800 shadow-sm backdrop-blur-sm dark:border-red-900 dark:bg-red-950/90 dark:text-red-200"
+              >
+                {mapGeoMsg}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="pointer-events-none absolute bottom-2 left-2 z-800 rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1 text-[11px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
+            {rows.length} pontos registrados
+          </div>
+
+          <div className="pointer-events-none absolute top-2 right-2 z-1000 flex flex-col items-end gap-2">
+            <button
+              type="button"
+              title="Vista padrão do mapa"
+              aria-label="Voltar à vista padrão do mapa"
+              className="pointer-events-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white/95 text-zinc-800 shadow-md backdrop-blur-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900/95 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              onClick={flyToDefaultView}
             >
-              {mapGeoMsg}
-            </p>
-          ) : null}
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                title="Minha localização"
-                aria-label="Centralizar na minha localização"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-                onClick={flyToMyLocation}
-              >
-                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M12 2v2M12 20v2M2 12h2M20 12h2" strokeLinecap="round" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                title="Vista padrão do mapa"
-                aria-label="Voltar à vista padrão do mapa"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-                onClick={flyToDefaultView}
-              >
-                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-                </svg>
-              </button>
-            </div>
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+              </svg>
+            </button>
             <button
               type="button"
               title={addMode ? "Cancelar inclusão manual" : "Registrar bueiro no mapa"}
               aria-label={addMode ? "Cancelar inclusão manual" : "Registrar bueiro no mapa"}
               aria-pressed={addMode}
               onClick={toggleAddMode}
-              className={`inline-flex h-9 min-h-9 w-full max-w-md items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold shadow-sm sm:w-auto ${
+              className={`pointer-events-auto inline-flex min-h-9 items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold shadow-md backdrop-blur-sm ${
                 addMode
-                  ? "border border-purple-800 bg-purple-800 text-white hover:bg-purple-900"
-                  : "border border-purple-500 bg-purple-600 text-white hover:bg-purple-500"
+                  ? "border border-purple-800 bg-purple-800/95 text-white hover:bg-purple-900"
+                  : "border border-purple-500 bg-purple-600/95 text-white hover:bg-purple-500"
               }`}
             >
-              <span className="text-lg font-bold leading-none">+</span>
+              <span className="text-base font-bold leading-none">+</span>
               <span>{addMode ? "Cancelar" : "Registrar bueiro"}</span>
             </button>
           </div>
-          <div className="relative h-[min(70vh,560px)] min-h-0 w-full overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
-            <MapContainer
-              center={DEFAULT_MAP_CENTER}
-              zoom={DEFAULT_MAP_ZOOM}
-              className="h-full w-full touch-manipulation"
-              scrollWheelZoom
-            >
-              <MapInstanceBridge mapRef={mapRef} />
-              <IconFix />
-              <ThemeTiles dark={isDark} />
-              <SubprefeiturasLayer />
-              <MapClickRouter
-                relocateActive={!!relocateId}
-                addPickActive={addPickActive}
-                onRelocatePick={onMapPickRelocate}
-                onAddPick={onMapPickManual}
-              />
-              {rows.map((r) => (
-                <CircleMarker
-                  key={r.id}
-                  center={[r.lat, r.lng]}
-                  radius={BUEIRO_CIRCLE_RADIUS_MAIN}
-                  pathOptions={pathOpts}
-                >
-                  <Popup>
-                    <BueiroPopupBody
-                      r={r}
-                      isDark={isDark}
-                      relocateActive={relocateId === r.id}
-                      onRequestRelocate={() => beginRelocate(r.id)}
-                    />
-                  </Popup>
-                </CircleMarker>
-              ))}
-            </MapContainer>
-          </div>
-        </div>
 
-        {manualDraft ? (
-          <aside className="scrollbar-none flex w-full shrink-0 flex-col rounded-2xl border border-purple-200 bg-white p-4 shadow-sm dark:border-purple-900/60 dark:bg-zinc-900 lg:max-h-[min(70vh,560px)] lg:w-72 lg:max-w-[20rem] lg:overflow-y-auto xl:w-80">
-            <h3 className="text-sm font-semibold text-purple-900 dark:text-purple-200">
-              Completar registro manual
-            </h3>
-            <p className="mt-1 text-xs leading-snug text-zinc-600 dark:text-zinc-400">
-              Ajuste os dados e salve. Coordenadas editáveis abaixo.
-            </p>
-            <div className="mt-3 flex flex-col gap-3">
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                Setor
-                <SectorCombobox
-                  sectors={sectors}
-                  value={manualSetor}
-                  onChange={setManualSetor}
-                  disabled={manualBusy}
-                />
-              </label>
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                Tipo
-                <select
-                  value={manualTipo}
-                  onChange={(e) => setManualTipo(e.target.value as BueiroTipo)}
-                  className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-2 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-                >
-                  <option value="boca_lobo">Boca de lobo</option>
-                  <option value="boca_leao">Boca de leão</option>
-                </select>
-              </label>
-              <div>
-                <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Endereço (coordenadas)</p>
-                <div
-                  className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm font-medium text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100"
-                  title="Preenchido automaticamente pela geocodificação"
-                >
-                  {draftAddressLoading ? (
-                    <span className="text-indigo-700/80 dark:text-indigo-200/80">Buscando endereço…</span>
-                  ) : (
-                    <span>{draftAddress ?? "Endereço indisponível para estas coordenadas."}</span>
-                  )}
-                </div>
-              </div>
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                Quantidade
-                <QuantidadeSelect
-                  value={manualQtd}
-                  onChange={setManualQtd}
-                  className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-2 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-                />
-              </label>
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                Latitude
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  value={manualLatText}
-                  onChange={(e) => setManualLatText(sanitizeCoordInput(e.target.value))}
-                  className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-2 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-                />
-              </label>
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                Longitude
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  value={manualLngText}
-                  onChange={(e) => setManualLngText(sanitizeCoordInput(e.target.value))}
-                  className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-2 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-                />
-              </label>
-            </div>
-            {manualMsg ? (
-              <p className="mt-3 text-sm text-red-600 dark:text-red-400">{manualMsg}</p>
-            ) : null}
-            <div className="mt-4 flex flex-col gap-2">
-              <button
-                type="button"
-                disabled={manualBusy}
-                onClick={saveManualBueiro}
-                className="w-full rounded-lg bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
+          <MapContainer
+            center={DEFAULT_MAP_CENTER}
+            zoom={DEFAULT_MAP_ZOOM}
+            className="h-full min-h-0 w-full flex-1 touch-manipulation"
+            scrollWheelZoom
+          >
+            <MapInstanceBridge mapRef={mapRef} />
+            <IconFix />
+            <ThemeTiles dark={isDark} />
+            <SubprefeiturasLayer />
+            <MapClickRouter
+              relocateActive={!!relocateId}
+              addPickActive={addPickActive}
+              onRelocatePick={onMapPickRelocate}
+              onAddPick={onMapPickManual}
+            />
+            {rows.map((r) => (
+              <CircleMarker
+                key={r.id}
+                center={[r.lat, r.lng]}
+                radius={BUEIRO_CIRCLE_RADIUS_MAIN}
+                pathOptions={pathOpts}
               >
-                {manualBusy ? "Salvando…" : "Salvar"}
-              </button>
-              <button
-                type="button"
-                disabled={manualBusy}
-                onClick={() => {
-                  setManualDraft(null);
-                  setManualLatText("");
-                  setManualLngText("");
-                  setManualSetor("");
-                  setManualMsg(null);
-                }}
-                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-semibold dark:border-zinc-600"
-              >
-                Escolher outro ponto
-              </button>
-              <button
-                type="button"
-                disabled={manualBusy}
-                onClick={resetManualAdd}
-                className="w-full rounded-lg py-2 text-sm font-semibold text-zinc-600 hover:underline dark:text-zinc-400"
-              >
-                Cancelar tudo
-              </button>
-            </div>
-          </aside>
-        ) : null}
+                <Popup>
+                  <BueiroPopupBody
+                    r={r}
+                    isDark={isDark}
+                    relocateActive={relocateId === r.id}
+                    onRequestRelocate={() => beginRelocate(r.id)}
+                  />
+                </Popup>
+              </CircleMarker>
+            ))}
+          </MapContainer>
       </div>
+
+      {manualDraft ? (
+        <aside className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-purple-200 bg-white p-3 shadow-sm dark:border-purple-900/60 dark:bg-zinc-900 lg:h-full lg:w-72 lg:max-w-[20rem] lg:flex-none lg:self-stretch xl:w-80">
+          <h3 className="shrink-0 text-sm font-semibold text-purple-900 dark:text-purple-200">
+            Completar registro manual
+          </h3>
+          <p className="mt-0.5 shrink-0 text-[11px] leading-snug text-zinc-600 dark:text-zinc-400">
+            Ajuste os dados e salve. Coordenadas editáveis abaixo.
+          </p>
+          <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              Setor
+              <SectorCombobox
+                sectors={sectors}
+                value={manualSetor}
+                onChange={setManualSetor}
+                disabled={manualBusy}
+              />
+            </label>
+            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              Tipo
+              <select
+                value={manualTipo}
+                onChange={(e) => setManualTipo(e.target.value as BueiroTipo)}
+                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+              >
+                <option value="boca_lobo">Boca de lobo</option>
+                <option value="boca_leao">Boca de leão</option>
+              </select>
+            </label>
+            <div className="min-h-0 shrink">
+              <p className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">Endereço (coordenadas)</p>
+              <div
+                className="mt-0.5 line-clamp-3 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[11px] font-medium leading-snug text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100"
+                title="Preenchido automaticamente pela geocodificação"
+              >
+                {draftAddressLoading ? (
+                  <span className="text-indigo-700/80 dark:text-indigo-200/80">Buscando endereço…</span>
+                ) : (
+                  <span>{draftAddress ?? "Endereço indisponível para estas coordenadas."}</span>
+                )}
+              </div>
+            </div>
+            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              Quantidade
+              <QuantidadeSelect
+                value={manualQtd}
+                onChange={setManualQtd}
+                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+              />
+            </label>
+            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              Latitude
+              <input
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                value={manualLatText}
+                onChange={(e) => setManualLatText(sanitizeCoordInput(e.target.value))}
+                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+              />
+            </label>
+            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              Longitude
+              <input
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                value={manualLngText}
+                onChange={(e) => setManualLngText(sanitizeCoordInput(e.target.value))}
+                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+              />
+            </label>
+          </div>
+          {manualMsg ? (
+            <p className="mt-2 shrink-0 text-xs text-red-600 dark:text-red-400">{manualMsg}</p>
+          ) : null}
+          <div className="mt-auto flex shrink-0 flex-col gap-1.5 pt-2">
+            <button
+              type="button"
+              disabled={manualBusy}
+              onClick={saveManualBueiro}
+              className="w-full rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
+            >
+              {manualBusy ? "Salvando…" : "Salvar"}
+            </button>
+            <button
+              type="button"
+              disabled={manualBusy}
+              onClick={() => {
+                setManualDraft(null);
+                setManualLatText("");
+                setManualLngText("");
+                setManualSetor("");
+                setManualMsg(null);
+              }}
+              className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold dark:border-zinc-600"
+            >
+              Escolher outro ponto
+            </button>
+            <button
+              type="button"
+              disabled={manualBusy}
+              onClick={resetManualAdd}
+              className="w-full rounded-lg py-1.5 text-xs font-semibold text-zinc-600 hover:underline dark:text-zinc-400"
+            >
+              Cancelar tudo
+            </button>
+          </div>
+        </aside>
+      ) : null}
     </div>
   );
 }
