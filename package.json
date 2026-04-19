@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync-shared": "cp -f ../shared/firestore.ts ../shared/setor-status.ts ../shared/format-short-address.ts lib/shared/"
   },
   "dependencies": {
     "@types/leaflet": "^1.9.21",
