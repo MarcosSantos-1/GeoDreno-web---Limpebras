@@ -12,6 +12,7 @@ import {
   DEFAULT_MAP_ZOOM,
   SUBPREFS_GEOJSON_URL,
   bueiroMarkerPathOptions,
+  googleMapsStreetViewUrl,
   subprefPolygonStyle,
   tipoLabelBr,
 } from "@/lib/mapa-shared";
@@ -65,6 +66,8 @@ function SubprefeiturasLayer() {
   return (
     <GeoJSON
       data={data as never}
+      /** Evita que os polígonos “capturem” cliques por cima dos marcadores. */
+      interactive={false}
       style={(feat) => {
         const p = feat?.properties as { sg_subprefeitura?: string } | null | undefined;
         return subprefPolygonStyle(p?.sg_subprefeitura);
@@ -108,6 +111,25 @@ function MapInstanceBridge({ mapRef }: { mapRef: React.MutableRefObject<LeafletM
   return null;
 }
 
+/** Recalcula hit-test/tiles quando o container flex muda de tamanho (evita cliques “mortos”). */
+function MapResizeSync() {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+    });
+    ro.observe(el);
+    const onWin = () => map.invalidateSize({ animate: false });
+    window.addEventListener("orientationchange", onWin);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("orientationchange", onWin);
+    };
+  }, [map]);
+  return null;
+}
+
 /** `flyTo` costuma falhar em alguns WebKit móveis; `setView` + invalidate é mais estável. */
 function moveMapView(map: LeafletMap, center: [number, number], zoom: number) {
   map.invalidateSize();
@@ -117,16 +139,28 @@ function moveMapView(map: LeafletMap, center: [number, number], zoom: number) {
   });
 }
 
+function StreetViewGlyph({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <circle cx="12" cy="12" r="9" strokeOpacity="0.35" />
+      <circle cx="12" cy="9" r="2.25" fill="currentColor" stroke="none" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.5 18.2c.8-2.2 2.4-3.45 3.5-3.45s2.7 1.25 3.5 3.45"
+      />
+    </svg>
+  );
+}
+
 function BueiroPopupBody({
   r,
   onRequestRelocate,
   relocateActive,
-  isDark,
 }: {
   r: Row;
   onRequestRelocate: () => void;
   relocateActive: boolean;
-  isDark: boolean;
 }) {
   const [tipo, setTipo] = useState<BueiroTipo>(r.tipo);
   const [quantidade, setQuantidade] = useState(r.quantidade);
@@ -188,15 +222,18 @@ function BueiroPopupBody({
     }
   }, [r.id]);
 
-  const editBorder = isDark ? "border-zinc-700" : "border-zinc-200";
-  const editMuted = isDark ? "text-zinc-400" : "text-zinc-500";
-  const editInput = isDark
-    ? "border-zinc-600 bg-zinc-900 text-zinc-100"
-    : "border-zinc-300 bg-white text-zinc-900";
-  const editBtnGhost = isDark ? "border-zinc-600 text-zinc-100" : "border-zinc-300 text-zinc-800";
+  const editBorder = "border-zinc-200";
+  const editMuted = "text-zinc-500";
+  const editInput = "border-zinc-300 bg-white text-zinc-900";
+  const editBtnGhost = "border-zinc-300 text-zinc-800";
+
+  const streetLat = parseCoordText(latText);
+  const streetLng = parseCoordText(lngText);
+  const streetViewHref =
+    streetLat != null && streetLng != null ? googleMapsStreetViewUrl(streetLat, streetLng) : null;
 
   return (
-    <div className="min-w-[200px] max-w-[280px] text-sm">
+    <div className="scheme-light min-w-[200px] max-w-[280px] text-sm">
       <div className="text-zinc-900">
         <div className="font-semibold">{tipoLabelBr(r.tipo)}</div>
         <div className="mt-1 text-xs text-zinc-600">
@@ -211,6 +248,18 @@ function BueiroPopupBody({
         ) : null}
         {r.gpsAlerta ? <div className="text-xs text-amber-700">Alerta de GPS</div> : null}
         {r.displayName ? <div className="text-xs text-zinc-500">Por: {r.displayName}</div> : null}
+        {streetViewHref ? (
+          <a
+            href={streetViewHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`mt-2 inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold ${editBtnGhost} bg-white hover:bg-zinc-50`}
+            title="Abrir Street View neste ponto no Google Maps"
+          >
+            <StreetViewGlyph className="h-3.5 w-3.5 shrink-0 text-zinc-700" />
+            Ver local
+          </a>
+        ) : null}
       </div>
 
       <div className={`mt-3 space-y-2 border-t pt-2 ${editBorder}`}>
@@ -270,13 +319,13 @@ function BueiroPopupBody({
             disabled={busy}
             onClick={onRequestRelocate}
             className={`rounded px-2 py-1 text-[11px] font-semibold ${
-              relocateActive ? "bg-amber-500 text-white" : `border ${editBtnGhost}`
+              relocateActive ? "bg-amber-500 text-white" : `border ${editBtnGhost} bg-white`
             }`}
           >
             {relocateActive ? "Clique no mapa…" : "Mover (mapa)"}
           </button>
         </div>
-        {msg ? <p className={`text-[10px] ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>{msg}</p> : null}
+        {msg ? <p className="text-[10px] text-zinc-600">{msg}</p> : null}
       </div>
     </div>
   );
@@ -616,6 +665,7 @@ export default function MapaClient({
             scrollWheelZoom
           >
             <MapInstanceBridge mapRef={mapRef} />
+            <MapResizeSync />
             <IconFix />
             <ThemeTiles dark={isDark} />
             <SubprefeiturasLayer />
@@ -632,14 +682,13 @@ export default function MapaClient({
                 radius={BUEIRO_CIRCLE_RADIUS_MAIN}
                 pathOptions={pathOpts}
               >
-                <Popup>
-                  <BueiroPopupBody
-                    r={r}
-                    isDark={isDark}
-                    relocateActive={relocateId === r.id}
-                    onRequestRelocate={() => beginRelocate(r.id)}
-                  />
-                </Popup>
+                  <Popup>
+                    <BueiroPopupBody
+                      r={r}
+                      relocateActive={relocateId === r.id}
+                      onRequestRelocate={() => beginRelocate(r.id)}
+                    />
+                  </Popup>
               </CircleMarker>
             ))}
           </MapContainer>

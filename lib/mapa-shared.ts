@@ -35,7 +35,13 @@ export function bueiroMarkerPathOptions(isDark: boolean): MapPathStyle {
       };
 }
 
-export const BUEIRO_CIRCLE_RADIUS_MAIN = 4;
+/** Raio em px (SVG); valores maiores melhoram toque/clique sem poluir demais o mapa. */
+export const BUEIRO_CIRCLE_RADIUS_MAIN = 7;
+
+/** Abre o Street View do Google Maps no ponto (link público; não exige API key). */
+export function googleMapsStreetViewUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
+}
 
 export function subprefPolygonStyle(sg: string | undefined): MapPathStyle {
   const base: MapPathStyle = { weight: 2, fillOpacity: 0.14, opacity: 0.95 };
