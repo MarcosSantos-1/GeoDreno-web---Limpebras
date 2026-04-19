@@ -48,58 +48,6 @@ export default function ExportarPage() {
     queueMicrotask(() => void load());
   }, [ready, profile?.nome, load]);
 
-  const csv = useCallback(() => {
-    const header = [
-      "tipo",
-      "quantidade",
-      "latitude",
-      "longitude",
-      "logradouro",
-      "endereco_manual",
-      "subprefeitura",
-      "setor",
-           "usuario",
-      "data",
-      "hora",
-      "gps_alerta",
-    ];
-    const lines = [header.join(",")];
-    for (const r of rows) {
-      const tipo = r.tipo === "boca_lobo" ? "Boca de Lobo" : "Boca de Leão";
-      const esc = (s: string | undefined) =>
-        `"${(s ?? "").replace(/"/g, '""')}"`;
-      const { data, hora } = splitDateTimeExport(r.createdAt);
-      const enderecoLinha =
-        r.enderecoGeocodificado?.trim() || r.logradouro?.trim() || "";
-      lines.push(
-        [
-          esc(tipo),
-          r.quantidade,
-          r.lat,
-          r.lng,
-          esc(enderecoLinha),
-          esc(r.enderecoManual),
-          esc(r.subprefeitura),
-          esc(r.setor),
-          esc(r.displayName),
-          esc(data),
-          esc(hora),
-          r.gpsAlerta ? "sim" : "nao",
-        ].join(","),
-      );
-    }
-    return lines.join("\n");
-  }, [rows]);
-
-  const downloadCsv = () => {
-    const blob = new Blob([csv()], { type: "text/csv;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `geodreno-bueiros-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
   const downloadXlsx = () => {
     const data = rows.map((r) => {
       const { data: dataStr, hora: horaStr } = splitDateTimeExport(r.createdAt);
@@ -160,17 +108,20 @@ export default function ExportarPage() {
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={downloadCsv}
-            className="rounded-xl bg-indigo-600 px-5 py-2.5 font-semibold text-white hover:bg-indigo-500"
-          >
-            Baixar CSV
-          </button>
-          <button
-            type="button"
             onClick={downloadXlsx}
-            className="rounded-xl border border-zinc-300 bg-white px-5 py-2.5 font-semibold text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 font-semibold text-white hover:bg-indigo-500"
           >
-            Baixar Excel (.xlsx)
+            <svg
+              className="h-5 w-5 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" fill="none" strokeWidth={2} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9h18M3 15h18M9 3v18M15 3v18" />
+            </svg>
+            Baixar planilha dos dados
           </button>
           <button
             type="button"

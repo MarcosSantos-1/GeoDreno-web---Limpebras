@@ -44,13 +44,22 @@ export default function HomePage() {
 
   if (profile?.nome) {
     return (
-      <AppShell>
-        <DashboardHome sectorsTotal={sectorsTotal} />
-      </AppShell>
+      <>
+        <AppShell>
+          <DashboardHome sectorsTotal={sectorsTotal} />
+        </AppShell>
+        <p
+          className="pointer-events-none fixed bottom-3 right-3 z-50 text-[11px] tabular-nums text-zinc-400 select-none dark:text-zinc-500"
+          aria-hidden
+        >
+          1.0.0
+        </p>
+      </>
     );
   }
 
   return (
+    <>
     <AppShell>
       <div className="mx-auto max-w-md space-y-6">
         <div>
@@ -84,5 +93,12 @@ export default function HomePage() {
         </form>
       </div>
     </AppShell>
+    <p
+      className="pointer-events-none fixed bottom-3 right-3 z-50 text-[11px] tabular-nums text-zinc-400 select-none dark:text-zinc-500"
+      aria-hidden
+    >
+      1.0.0
+    </p>
+    </>
   );
 }

@@ -27,7 +27,8 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import "leaflet/dist/leaflet.css";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Map as LeafletMap } from "leaflet";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   CircleMarker,
   GeoJSON,
@@ -92,40 +93,35 @@ function MapClickRouter({
   return null;
 }
 
-function MapFloatingControls({ addMode, onToggleAdd }: { addMode: boolean; onToggleAdd: () => void }) {
+/**
+ * O `ref` do MapContainer só recebe a instância após `setContext` (assíncrono). No Safari iOS o primeiro toque
+ * costuma ver `ref.current === null`. `useMap()` dentro do container preenche o ref no mesmo ciclo útil.
+ */
+function MapInstanceBridge({ mapRef }: { mapRef: React.MutableRefObject<LeafletMap | null> }) {
   const map = useMap();
-  return (
-    <div className="absolute right-3 top-3 z-1000 flex flex-col gap-2">
-      <button
-        type="button"
-        title="Centralizar mapa"
-        aria-label="Centralizar mapa"
-        className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-300 bg-white/95 text-zinc-800 shadow-sm backdrop-blur hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900/95 dark:text-zinc-100 dark:hover:bg-zinc-800"
-        onClick={() => {
-          map.setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
-        }}
-      >
-        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        title={addMode ? "Cancelar inclusão manual" : "Adicionar bueiro manualmente"}
-        aria-label={addMode ? "Cancelar inclusão manual" : "Adicionar bueiro manualmente"}
-        aria-pressed={addMode}
-        className={`flex h-9 w-9 items-center justify-center rounded-lg text-lg font-bold leading-none shadow-sm backdrop-blur ${
-          addMode
-            ? "border border-purple-800 bg-purple-800 text-white hover:bg-purple-900"
-            : "border border-purple-500 bg-purple-600 text-white hover:bg-purple-500"
-        }`}
-        onClick={onToggleAdd}
-      >
-        +
-      </button>
-    </div>
-  );
+  useLayoutEffect(() => {
+    mapRef.current = map;
+    return () => {
+      mapRef.current = null;
+    };
+  }, [map, mapRef]);
+  return null;
+}
+
+function geoErrorMessage(code: number | undefined): string {
+  if (code === 1) return "Permissão de localização negada. Ative em Ajustes › Safari › Localização (ou do site).";
+  if (code === 2) return "Posição indisponível. Tente sair de prédios fechados ou ative Wi‑Fi.";
+  if (code === 3) return "Tempo esgotado ao obter o GPS. Tente de novo em alguns segundos.";
+  return "Não foi possível obter a localização.";
+}
+
+/** `flyTo` costuma falhar em alguns WebKit móveis; `setView` + invalidate é mais estável. */
+function moveMapView(map: LeafletMap, center: [number, number], zoom: number) {
+  map.invalidateSize();
+  map.setView(center, zoom, { animate: true });
+  requestAnimationFrame(() => {
+    map.invalidateSize();
+  });
 }
 
 function BueiroPopupBody({
@@ -158,8 +154,8 @@ function BueiroPopupBody({
     setBusy(true);
     setMsg(null);
     try {
-      if (quantidade < 1 || quantidade > 100000 || !Number.isInteger(quantidade)) {
-        setMsg("Quantidade inválida.");
+      if (quantidade < 1 || quantidade > 6 || !Number.isInteger(quantidade)) {
+        setMsg("Quantidade inválida (1–6).");
         return;
       }
       const lat = parseCoordText(latText);
@@ -315,12 +311,61 @@ export default function MapaClient({
   const [manualBusy, setManualBusy] = useState(false);
   const [manualMsg, setManualMsg] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [draftAddress, setDraftAddress] = useState<string | null>(null);
+  const [draftAddressLoading, setDraftAddressLoading] = useState(false);
+  const mapRef = useRef<LeafletMap | null>(null);
+  const [mapGeoMsg, setMapGeoMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  useEffect(() => {
+    if (!mapGeoMsg) return;
+    const t = window.setTimeout(() => setMapGeoMsg(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [mapGeoMsg]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let debounceTimer: number | undefined;
+    const outerTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      if (!manualDraft) {
+        setDraftAddress(null);
+        setDraftAddressLoading(false);
+        return;
+      }
+      const lat = parseCoordText(manualLatText);
+      const lng = parseCoordText(manualLngText);
+      if (lat == null || lng == null) {
+        setDraftAddress(null);
+        setDraftAddressLoading(false);
+        return;
+      }
+      setDraftAddressLoading(true);
+      debounceTimer = window.setTimeout(() => {
+        fetchReverseGeocode(lat, lng)
+          .then((a) => {
+            if (cancelled) return;
+            setDraftAddress(a);
+          })
+          .catch(() => {
+            if (!cancelled) setDraftAddress(null);
+          })
+          .finally(() => {
+            if (!cancelled) setDraftAddressLoading(false);
+          });
+      }, 400);
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(outerTimer);
+      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
+    };
+  }, [manualDraft, manualLatText, manualLngText]);
 
   useEffect(() => {
     let cancelled = false;
@@ -417,8 +462,8 @@ export default function MapaClient({
       setManualMsg("Selecione o setor.");
       return;
     }
-    if (manualQtd < 1 || manualQtd > 100000 || !Number.isInteger(manualQtd)) {
-      setManualMsg("Quantidade inválida.");
+    if (manualQtd < 1 || manualQtd > 6 || !Number.isInteger(manualQtd)) {
+      setManualMsg("Quantidade inválida (1–6).");
       return;
     }
     const lat = parseCoordText(manualLatText);
@@ -468,6 +513,71 @@ export default function MapaClient({
 
   const addPickActive = addMode && !manualDraft && !relocateId;
 
+  const withLeafletMap = useCallback(
+    (fn: (map: LeafletMap) => void, onMissing?: () => void) => {
+      const tryRun = (attempt: number) => {
+        const m = mapRef.current;
+        if (m) {
+          fn(m);
+          return;
+        }
+        if (attempt < 12) {
+          window.setTimeout(() => tryRun(attempt + 1), 40);
+          return;
+        }
+        onMissing?.();
+      };
+      tryRun(0);
+    },
+    [],
+  );
+
+  const flyToDefaultView = useCallback(() => {
+    setMapGeoMsg(null);
+    withLeafletMap(
+      (map) => moveMapView(map, DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM),
+      () => setMapGeoMsg("Mapa ainda não carregou. Toque de novo em um instante."),
+    );
+  }, [withLeafletMap]);
+
+  const flyToMyLocation = useCallback(() => {
+    setMapGeoMsg(null);
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setMapGeoMsg("Geolocalização não disponível neste navegador.");
+      return;
+    }
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      setMapGeoMsg("Abra o site com HTTPS (ou use o endereço seguro do servidor) para a localização funcionar.");
+      return;
+    }
+
+    const applyPosition = (pos: GeolocationPosition) => {
+      withLeafletMap(
+        (map) => moveMapView(map, [pos.coords.latitude, pos.coords.longitude], 17),
+        () => setMapGeoMsg("Mapa ainda não carregou. Toque de novo em um instante."),
+      );
+    };
+
+    const onGeoErr = (err: GeolocationPositionError) => {
+      const code = err?.code;
+      if (code === 1) {
+        setMapGeoMsg(geoErrorMessage(code));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        applyPosition,
+        (err2) => setMapGeoMsg(geoErrorMessage(err2?.code)),
+        { enableHighAccuracy: false, maximumAge: 60_000, timeout: 25_000 },
+      );
+    };
+
+    navigator.geolocation.getCurrentPosition(applyPosition, onGeoErr, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 20_000,
+    });
+  }, [withLeafletMap]);
+
   return (
     <div className="space-y-4">
       {notice ? (
@@ -502,41 +612,94 @@ export default function MapaClient({
         </p>
       ) : null}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
-        <div className="relative h-[min(70vh,560px)] min-h-0 min-w-0 w-full flex-1 overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
-          <MapContainer
-            center={DEFAULT_MAP_CENTER}
-            zoom={DEFAULT_MAP_ZOOM}
-            className="h-full w-full"
-            scrollWheelZoom
-          >
-            <IconFix />
-            <ThemeTiles dark={isDark} />
-            <SubprefeiturasLayer />
-            <MapClickRouter
-              relocateActive={!!relocateId}
-              addPickActive={addPickActive}
-              onRelocatePick={onMapPickRelocate}
-              onAddPick={onMapPickManual}
-            />
-            <MapFloatingControls addMode={addMode} onToggleAdd={toggleAddMode} />
-            {rows.map((r) => (
-              <CircleMarker
-                key={r.id}
-                center={[r.lat, r.lng]}
-                radius={BUEIRO_CIRCLE_RADIUS_MAIN}
-                pathOptions={pathOpts}
+        <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col gap-2">
+          {mapGeoMsg ? (
+            <p
+              role="status"
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+            >
+              {mapGeoMsg}
+            </p>
+          ) : null}
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                title="Minha localização"
+                aria-label="Centralizar na minha localização"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                onClick={flyToMyLocation}
               >
-                <Popup>
-                  <BueiroPopupBody
-                    r={r}
-                    isDark={isDark}
-                    relocateActive={relocateId === r.id}
-                    onRequestRelocate={() => beginRelocate(r.id)}
-                  />
-                </Popup>
-              </CircleMarker>
-            ))}
-          </MapContainer>
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 2v2M12 20v2M2 12h2M20 12h2" strokeLinecap="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                title="Vista padrão do mapa"
+                aria-label="Voltar à vista padrão do mapa"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                onClick={flyToDefaultView}
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                </svg>
+              </button>
+            </div>
+            <button
+              type="button"
+              title={addMode ? "Cancelar inclusão manual" : "Registrar bueiro no mapa"}
+              aria-label={addMode ? "Cancelar inclusão manual" : "Registrar bueiro no mapa"}
+              aria-pressed={addMode}
+              onClick={toggleAddMode}
+              className={`inline-flex h-9 min-h-9 w-full max-w-md items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold shadow-sm sm:w-auto ${
+                addMode
+                  ? "border border-purple-800 bg-purple-800 text-white hover:bg-purple-900"
+                  : "border border-purple-500 bg-purple-600 text-white hover:bg-purple-500"
+              }`}
+            >
+              <span className="text-lg font-bold leading-none">+</span>
+              <span>{addMode ? "Cancelar" : "Registrar bueiro"}</span>
+            </button>
+          </div>
+          <div className="relative h-[min(70vh,560px)] min-h-0 w-full overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
+            <MapContainer
+              center={DEFAULT_MAP_CENTER}
+              zoom={DEFAULT_MAP_ZOOM}
+              className="h-full w-full touch-manipulation"
+              scrollWheelZoom
+            >
+              <MapInstanceBridge mapRef={mapRef} />
+              <IconFix />
+              <ThemeTiles dark={isDark} />
+              <SubprefeiturasLayer />
+              <MapClickRouter
+                relocateActive={!!relocateId}
+                addPickActive={addPickActive}
+                onRelocatePick={onMapPickRelocate}
+                onAddPick={onMapPickManual}
+              />
+              {rows.map((r) => (
+                <CircleMarker
+                  key={r.id}
+                  center={[r.lat, r.lng]}
+                  radius={BUEIRO_CIRCLE_RADIUS_MAIN}
+                  pathOptions={pathOpts}
+                >
+                  <Popup>
+                    <BueiroPopupBody
+                      r={r}
+                      isDark={isDark}
+                      relocateActive={relocateId === r.id}
+                      onRequestRelocate={() => beginRelocate(r.id)}
+                    />
+                  </Popup>
+                </CircleMarker>
+              ))}
+            </MapContainer>
+          </div>
         </div>
 
         {manualDraft ? (
@@ -568,6 +731,19 @@ export default function MapaClient({
                   <option value="boca_leao">Boca de leão</option>
                 </select>
               </label>
+              <div>
+                <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Endereço (coordenadas)</p>
+                <div
+                  className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm font-medium text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100"
+                  title="Preenchido automaticamente pela geocodificação"
+                >
+                  {draftAddressLoading ? (
+                    <span className="text-indigo-700/80 dark:text-indigo-200/80">Buscando endereço…</span>
+                  ) : (
+                    <span>{draftAddress ?? "Endereço indisponível para estas coordenadas."}</span>
+                  )}
+                </div>
+              </div>
               <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
                 Quantidade
                 <QuantidadeSelect

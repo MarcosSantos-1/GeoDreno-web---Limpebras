@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useLayoutEffect, useState } from "react";
 
 interface ThemeContextType {
   isDark: boolean;
@@ -13,26 +13,25 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [isDark, setIsDark] = useState(false);
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem("theme") || "light";
-    const darkMode = savedTheme === "dark";
-    document.documentElement.classList.toggle("dark", darkMode);
-    queueMicrotask(() => setIsDark(darkMode));
+  /** Alinha o estado com a classe em `document.documentElement` (script no layout) para o ícone refletir o tema real. */
+  useLayoutEffect(() => {
+    const dark = document.documentElement.classList.contains("dark");
+    queueMicrotask(() => setIsDark(dark));
   }, []);
 
-  const toggleTheme = () => {
-    const newTheme = !isDark;
-    setIsDark(newTheme);
-    localStorage.setItem("theme", newTheme ? "dark" : "light");
-    document.documentElement.classList.toggle("dark", newTheme);
-  };
+  const toggleTheme = useCallback(() => {
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    localStorage.setItem("theme", next ? "dark" : "light");
+    setIsDark(next);
+  }, []);
 
-  const setTheme = (theme: "light" | "dark") => {
+  const setTheme = useCallback((theme: "light" | "dark") => {
     const darkMode = theme === "dark";
-    setIsDark(darkMode);
-    localStorage.setItem("theme", theme);
     document.documentElement.classList.toggle("dark", darkMode);
-  };
+    localStorage.setItem("theme", theme);
+    setIsDark(darkMode);
+  }, []);
 
   return (
     <ThemeContext.Provider value={{ isDark, toggleTheme, setTheme }}>
