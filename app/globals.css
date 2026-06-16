@@ -282,3 +282,9 @@
     color: #f4f4f5 !important;
   }
 }
+
+/* Cursor "clique para posicionar" enquanto o modo de registro manual aguarda o ponto. */
+.leaflet-container.cursor-pick,
+.leaflet-container.cursor-pick .leaflet-interactive {
+  cursor: pointer !important;
+}

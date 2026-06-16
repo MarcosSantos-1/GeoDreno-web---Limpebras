@@ -43,14 +43,16 @@ async function reverseNominatim(lat: number, lng: number): Promise<string | null
 
 /**
  * GET /api/reverse-geocode?lat=&lng=
- * Usa GOOGLE_MAPS_GEOCODING_API_KEY se definida; senão Nominatim (OpenStreetMap).
+ * Usa GOOGLE_MAPS_API_KEY (ou GOOGLE_MAPS_GEOCODING_API_KEY) se definida; senão Nominatim.
  */
 export async function GET(req: NextRequest) {
   const ll = parseLatLng(req);
   if (!ll) {
     return NextResponse.json({ error: "lat/lng inválidos" }, { status: 400 });
   }
-  const googleKey = process.env.GOOGLE_MAPS_GEOCODING_API_KEY?.trim();
+  const googleKey =
+    process.env.GOOGLE_MAPS_API_KEY?.trim() ||
+    process.env.GOOGLE_MAPS_GEOCODING_API_KEY?.trim();
   try {
     let address: string | null = null;
     if (googleKey) {

@@ -6,13 +6,17 @@ import { QuantidadeSelect } from "@/app/components/QuantidadeSelect";
 import { SectorCombobox } from "@/app/components/SectorCombobox";
 import { coordToInputText, parseCoordText, sanitizeCoordInput } from "@/lib/parse-coord";
 import { fetchReverseGeocode } from "@/lib/reverse-geocode-client";
+import { fetchGeocode } from "@/lib/geocode-client";
 import {
   BUEIRO_CIRCLE_RADIUS_MAIN,
   DEFAULT_MAP_CENTER,
   DEFAULT_MAP_ZOOM,
+  EIXO_SUB_COLORS,
   EIXOS_GEOJSON_URL,
   SUBPREFS_GEOJSON_URL,
-  eixosLinesStyle,
+  eixoLineStyle,
+  nearestEixo,
+  type EixosCollection,
   bueiroMarkerPathOptions,
   googleMapsStreetViewUrl,
   subprefPolygonStyle,
@@ -36,6 +40,7 @@ import {
   CircleMarker,
   GeoJSON,
   MapContainer,
+  Marker,
   Popup,
   useMap,
   useMapEvents,
@@ -78,54 +83,35 @@ function SubprefeiturasLayer() {
   );
 }
 
-/** Camada opcional: eixos de logradouros (`eixos.json`, gerado dos KMLs). Só busca após ligar o checkbox. */
+/** Camada opcional: eixos de logradouros (`eixos.json`, gerado dos KMLs). Dados carregados pelo pai. */
 function EixosLayer({
   active,
   isDark,
-  onLoadState,
+  data,
 }: {
   active: boolean;
   isDark: boolean;
-  onLoadState: (s: { loading: boolean; error: string | null }) => void;
+  data: EixosCollection | null;
 }) {
-  const [data, setData] = useState<SubprefFeatureCollection | null>(null);
-
-  useEffect(() => {
-    if (!active || data) return;
-    let cancelled = false;
-    onLoadState({ loading: true, error: null });
-    fetch(EIXOS_GEOJSON_URL)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((raw: SubprefFeatureCollection & { features?: unknown[] }) => {
-        if (cancelled) return;
-        const fc: SubprefFeatureCollection = {
-          type: "FeatureCollection",
-          features: Array.isArray(raw.features) ? raw.features : [],
-        };
-        setData(fc);
-        onLoadState({ loading: false, error: null });
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setData(null);
-          onLoadState({ loading: false, error: "Falha ao carregar os eixos." });
-        }
-      });
-    return () => {
-      cancelled = true;
-      onLoadState({ loading: false, error: null });
-    };
-  }, [active, data, onLoadState]);
-
   if (!active || !data?.features?.length) return null;
-
-  const lineStyle = eixosLinesStyle(isDark);
 
   return (
     <GeoJSON
+      /** `key` força recriar a camada quando o tema muda, recalculando as cores/opacidade. */
+      key={isDark ? "eixos-dark" : "eixos-light"}
       data={data as never}
-      interactive={false}
-      style={() => lineStyle}
+      style={(feat) => {
+        const eixo = (feat?.properties as { eixo?: string } | undefined)?.eixo;
+        return eixoLineStyle(eixo, isDark);
+      }}
+      onEachFeature={(feat, layer) => {
+        const eixo = (feat?.properties as { eixo?: string } | undefined)?.eixo;
+        if (eixo) {
+          layer.bindPopup(
+            `<div style="font-weight:600">Eixo</div><div>${eixo}</div>`,
+          );
+        }
+      }}
     />
   );
 }
@@ -412,18 +398,48 @@ export default function MapaClient({
   const mapRef = useRef<LeafletMap | null>(null);
   const [mapGeoMsg, setMapGeoMsg] = useState<string | null>(null);
   const [showEixosLayer, setShowEixosLayer] = useState(false);
-  const [eixosOverlayStatus, setEixosOverlayStatus] = useState<{ loading: boolean; error: string | null }>(
-    () => ({ loading: false, error: null }),
-  );
-  const reportEixosLoad = useCallback((s: { loading: boolean; error: string | null }) => {
-    setEixosOverlayStatus(s);
-  }, []);
+  const [eixosData, setEixosData] = useState<EixosCollection | null>(null);
+  const [eixosError, setEixosError] = useState<string | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResult, setSearchResult] = useState<
+    { lat: number; lng: number; address: string | null } | null
+  >(null);
 
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  /**
+   * Carrega `eixos.json` (lazy) quando a camada é ligada OU ao entrar no modo de registro manual
+   * (necessário para detectar o mapa/eixo do ponto clicado). Carrega uma única vez.
+   */
+  const eixosWanted = showEixosLayer || addMode;
+  const eixosLoading = eixosWanted && !eixosData && !eixosError;
+  useEffect(() => {
+    if (!eixosWanted || eixosData) return;
+    let cancelled = false;
+    fetch(EIXOS_GEOJSON_URL)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((raw: { features?: unknown[] }) => {
+        if (cancelled) return;
+        setEixosData({
+          type: "FeatureCollection",
+          features: (Array.isArray(raw.features) ? raw.features : []) as EixosCollection["features"],
+        });
+        setEixosError(null);
+      })
+      .catch(() => {
+        if (!cancelled) setEixosError("Falha ao carregar os eixos.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [eixosWanted, eixosData]);
 
   useEffect(() => {
     if (!mapGeoMsg) return;
@@ -498,6 +514,26 @@ export default function MapaClient({
 
   const pathOpts = useMemo(() => bueiroMarkerPathOptions(isDark), [isDark]);
 
+  /** Ponto do rascunho manual desenhado no mapa em tempo real (reflete edições de lat/lng). */
+  const draftLatLng = useMemo<[number, number] | null>(() => {
+    if (!manualDraft) return null;
+    const lat = parseCoordText(manualLatText);
+    const lng = parseCoordText(manualLngText);
+    return lat != null && lng != null ? [lat, lng] : null;
+  }, [manualDraft, manualLatText, manualLngText]);
+
+  /**
+   * Setor (= nomenclatura do eixo/KML, 1:1) mais próximo do ponto do rascunho. Preenche o input
+   * "Setor" automaticamente; recalcula ao clicar em outro ponto ou quando os eixos terminam de carregar.
+   */
+  const draftEixo = useMemo<string | null>(() => {
+    if (!draftLatLng) return null;
+    return nearestEixo(eixosData, draftLatLng[0], draftLatLng[1])?.eixo ?? null;
+  }, [draftLatLng, eixosData]);
+
+  /** Setor efetivo: escolha manual do usuário tem prioridade sobre o detectado automaticamente. */
+  const effectiveSetor = (manualSetor || draftEixo || "").trim();
+
   const onMapPickRelocate = useCallback(async (lat: number, lng: number) => {
     if (!relocateId) return;
     try {
@@ -561,7 +597,7 @@ export default function MapaClient({
       setManualMsg("Sessão inválida. Entre novamente.");
       return;
     }
-    if (!manualSetor.trim()) {
+    if (!effectiveSetor) {
       setManualMsg("Selecione o setor.");
       return;
     }
@@ -575,14 +611,14 @@ export default function MapaClient({
       setManualMsg("Latitude e longitude inválidas.");
       return;
     }
-    const sector = sectors.find((s) => s.setor === manualSetor);
+    const sector = sectors.find((s) => s.setor === effectiveSetor);
     setManualBusy(true);
     setManualMsg(null);
     try {
       const geo = await fetchReverseGeocode(lat, lng);
       await addDoc(collection(db, "bueiros_registros"), {
         visitaId: `web_${crypto.randomUUID()}`,
-        setor: manualSetor.trim(),
+        setor: effectiveSetor,
         userId,
         tipo: manualTipo,
         quantidade: manualQtd,
@@ -604,7 +640,7 @@ export default function MapaClient({
     }
   }, [
     userId,
-    manualSetor,
+    effectiveSetor,
     manualQtd,
     manualLatText,
     manualLngText,
@@ -643,10 +679,90 @@ export default function MapaClient({
     );
   }, [withLeafletMap]);
 
+  const runSearch = useCallback(async () => {
+    const q = searchQuery.trim();
+    if (!q || searchBusy) return;
+    setSearchBusy(true);
+    setSearchError(null);
+    try {
+      const hit = await fetchGeocode(q);
+      if (!hit) {
+        setSearchResult(null);
+        setSearchError("Endereço não encontrado.");
+        return;
+      }
+      setSearchResult(hit);
+      withLeafletMap(
+        (map) => moveMapView(map, [hit.lat, hit.lng], 18),
+        () => setSearchError("Mapa ainda não carregou. Tente de novo."),
+      );
+    } catch (e) {
+      console.error("[geocode]", e);
+      setSearchError("Falha na busca de endereço.");
+    } finally {
+      setSearchBusy(false);
+    }
+  }, [searchQuery, searchBusy, withLeafletMap]);
+
+  const clearSearch = useCallback(() => {
+    setSearchResult(null);
+    setSearchError(null);
+    setSearchQuery("");
+  }, []);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
           <div className="pointer-events-none absolute top-2 right-31 left-2 z-800 flex max-h-[45%] flex-col gap-2 overflow-hidden sm:right-32">
+            <form
+              className="pointer-events-auto flex w-1/2 min-w-[150px] items-stretch gap-1.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void runSearch();
+              }}
+            >
+              <div className="relative flex-1">
+                <span className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-zinc-400">
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m21 21-4.3-4.3" strokeLinecap="round" />
+                  </svg>
+                </span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Buscar endereço…"
+                  aria-label="Buscar endereço"
+                  className="w-full rounded-lg border border-zinc-300 bg-white/95 py-1.5 pr-7 pl-8 text-xs text-zinc-800 shadow-md backdrop-blur-sm placeholder:text-zinc-400 focus:border-cyan-500 focus:outline-none dark:border-zinc-600 dark:bg-zinc-900/95 dark:text-zinc-100"
+                />
+                {searchQuery || searchResult ? (
+                  <button
+                    type="button"
+                    onClick={clearSearch}
+                    title="Limpar busca"
+                    aria-label="Limpar busca"
+                    className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                  >
+                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
+                      <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                ) : null}
+              </div>
+              <button
+                type="submit"
+                disabled={searchBusy || !searchQuery.trim()}
+                className="shrink-0 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white shadow-md hover:bg-cyan-500 disabled:opacity-50"
+              >
+                {searchBusy ? "…" : "Buscar"}
+              </button>
+            </form>
+            {searchError ? (
+              <p className="pointer-events-auto rounded-lg border border-red-200 bg-red-50/95 px-2.5 py-1.5 text-[11px] font-medium text-red-800 shadow-sm backdrop-blur-sm dark:border-red-900 dark:bg-red-950/90 dark:text-red-200">
+                {searchError}
+              </p>
+            ) : null}
             {notice ? (
               <p
                 role="status"
@@ -685,8 +801,26 @@ export default function MapaClient({
             ) : null}
           </div>
 
-          <div className="pointer-events-none absolute bottom-2 left-2 z-800 rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1 text-[11px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
-            {rows.length} pontos registrados
+          <div className="pointer-events-none absolute bottom-2 left-2 z-800 flex flex-col gap-1.5">
+            {showEixosLayer ? (
+              <div className="rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1.5 text-[10px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
+                <div className="mb-0.5 font-semibold">Eixos por sub</div>
+                <div className="flex flex-col gap-0.5">
+                  {Object.entries(EIXO_SUB_COLORS).map(([sub, color]) => (
+                    <span key={sub} className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                      {sub}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1 text-[11px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
+              {rows.length} pontos registrados
+            </div>
           </div>
 
           <div className="pointer-events-none absolute top-2 right-2 z-1000 flex flex-col items-end gap-2">
@@ -722,25 +856,21 @@ export default function MapaClient({
                 type="checkbox"
                 className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-cyan-600 dark:accent-cyan-500"
                 checked={showEixosLayer}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  setShowEixosLayer(v);
-                  if (!v) setEixosOverlayStatus({ loading: false, error: null });
-                }}
+                onChange={(e) => setShowEixosLayer(e.target.checked)}
               />
               <span className="leading-snug">
                 <span aria-hidden className="mr-1">
                   🗺️
                 </span>
                 Eixos
-                {eixosOverlayStatus.loading ? (
+                {showEixosLayer && eixosLoading ? (
                   <span className="mt-0.5 block text-[10px] font-normal text-cyan-700 dark:text-cyan-300">
                     Carregando…
                   </span>
                 ) : null}
-                {eixosOverlayStatus.error ? (
+                {showEixosLayer && eixosError ? (
                   <span className="mt-0.5 block text-[10px] font-normal text-red-600 dark:text-red-400">
-                    {eixosOverlayStatus.error}
+                    {eixosError}
                   </span>
                 ) : null}
               </span>
@@ -750,7 +880,10 @@ export default function MapaClient({
           <MapContainer
             center={DEFAULT_MAP_CENTER}
             zoom={DEFAULT_MAP_ZOOM}
-            className="h-full min-h-0 w-full flex-1 touch-manipulation"
+            zoomControl={false}
+            className={`h-full min-h-0 w-full flex-1 touch-manipulation ${
+              addPickActive ? "cursor-pick" : ""
+            }`}
             scrollWheelZoom
           >
             <MapInstanceBridge mapRef={mapRef} />
@@ -758,7 +891,7 @@ export default function MapaClient({
             <IconFix />
             <ThemeTiles dark={isDark} />
             <SubprefeiturasLayer />
-            <EixosLayer active={showEixosLayer} isDark={isDark} onLoadState={reportEixosLoad} />
+            <EixosLayer active={showEixosLayer} isDark={isDark} data={eixosData} />
             <MapClickRouter
               relocateActive={!!relocateId}
               addPickActive={addPickActive}
@@ -781,6 +914,45 @@ export default function MapaClient({
                   </Popup>
               </CircleMarker>
             ))}
+            {searchResult ? (
+              <Marker position={[searchResult.lat, searchResult.lng]}>
+                <Popup>
+                  <div className="text-xs">
+                    <div className="font-semibold">Endereço pesquisado</div>
+                    <div className="mt-0.5">
+                      {searchResult.address ?? "Endereço sem rótulo."}
+                    </div>
+                    <div className="mt-1 text-zinc-500">
+                      {searchResult.lat.toFixed(6)}, {searchResult.lng.toFixed(6)}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            ) : null}
+            {draftLatLng ? (
+              <CircleMarker
+                center={draftLatLng}
+                radius={9}
+                pathOptions={{
+                  color: "#7c3aed",
+                  fillColor: "#a855f7",
+                  fillOpacity: 0.55,
+                  weight: 2,
+                }}
+              >
+                <Popup>
+                  <div className="text-xs">
+                    <div className="font-semibold text-purple-800">Novo bueiro (rascunho)</div>
+                    {draftEixo ? (
+                      <div className="mt-0.5">Mapa: <span className="font-medium">{draftEixo}</span></div>
+                    ) : null}
+                    <div className="mt-1 text-zinc-500">
+                      {draftLatLng[0].toFixed(6)}, {draftLatLng[1].toFixed(6)}
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            ) : null}
           </MapContainer>
       </div>
 
@@ -790,29 +962,39 @@ export default function MapaClient({
             Completar registro manual
           </h3>
           <p className="mt-0.5 shrink-0 text-[11px] leading-snug text-zinc-600 dark:text-zinc-400">
-            Ajuste os dados e salve. Coordenadas editáveis abaixo.
+            O setor é detectado automaticamente pelo ponto. Ajuste os dados e salve.
           </p>
           <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
             <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
               Setor
               <SectorCombobox
                 sectors={sectors}
-                value={manualSetor}
+                value={effectiveSetor}
                 onChange={setManualSetor}
                 disabled={manualBusy}
               />
             </label>
-            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-              Tipo
-              <select
-                value={manualTipo}
-                onChange={(e) => setManualTipo(e.target.value as BueiroTipo)}
-                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-              >
-                <option value="boca_lobo">Boca de lobo</option>
-                <option value="boca_leao">Boca de leão</option>
-              </select>
-            </label>
+            <div className="flex gap-2">
+              <label className="flex-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+                Tipo
+                <select
+                  value={manualTipo}
+                  onChange={(e) => setManualTipo(e.target.value as BueiroTipo)}
+                  className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+                >
+                  <option value="boca_lobo">Boca de lobo</option>
+                  <option value="boca_leao">Boca de leão</option>
+                </select>
+              </label>
+              <label className="flex-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+                Quantidade
+                <QuantidadeSelect
+                  value={manualQtd}
+                  onChange={setManualQtd}
+                  className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+                />
+              </label>
+            </div>
             <div className="min-h-0 shrink">
               <p className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">Endereço (coordenadas)</p>
               <div
@@ -826,36 +1008,6 @@ export default function MapaClient({
                 )}
               </div>
             </div>
-            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-              Quantidade
-              <QuantidadeSelect
-                value={manualQtd}
-                onChange={setManualQtd}
-                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-              />
-            </label>
-            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-              Latitude
-              <input
-                type="text"
-                inputMode="decimal"
-                autoComplete="off"
-                value={manualLatText}
-                onChange={(e) => setManualLatText(sanitizeCoordInput(e.target.value))}
-                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-              />
-            </label>
-            <label className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-              Longitude
-              <input
-                type="text"
-                inputMode="decimal"
-                autoComplete="off"
-                value={manualLngText}
-                onChange={(e) => setManualLngText(sanitizeCoordInput(e.target.value))}
-                className="mt-0.5 w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
-              />
-            </label>
           </div>
           {manualMsg ? (
             <p className="mt-2 shrink-0 text-xs text-red-600 dark:text-red-400">{manualMsg}</p>
