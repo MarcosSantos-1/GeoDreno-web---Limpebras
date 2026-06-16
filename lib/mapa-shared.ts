@@ -14,6 +14,16 @@ export const DEFAULT_MAP_ZOOM = 13;
 
 export const SUBPREFS_GEOJSON_URL = "/subprefeituras-lote-wgs84.geojson";
 
+/** Eixos de logradouros (gerado a partir dos KMLs em `assets/KMLs` via `npm run build:eixos`). */
+export const EIXOS_GEOJSON_URL = "/eixos.json";
+
+/** Estilo das linhas do GeoJSON de eixos. */
+export function eixosLinesStyle(isDark: boolean): MapPathStyle {
+  return isDark
+    ? { color: "#22d3ee", weight: 1, opacity: 0.75 }
+    : { color: "#0e7490", weight: 1, opacity: 0.8 };
+}
+
 export function tipoLabelBr(tipo: BueiroTipo): string {
   return tipo === "boca_leao" ? "Boca de leão" : "Boca de lobo";
 }

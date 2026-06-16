@@ -10,7 +10,9 @@ import {
   BUEIRO_CIRCLE_RADIUS_MAIN,
   DEFAULT_MAP_CENTER,
   DEFAULT_MAP_ZOOM,
+  EIXOS_GEOJSON_URL,
   SUBPREFS_GEOJSON_URL,
+  eixosLinesStyle,
   bueiroMarkerPathOptions,
   googleMapsStreetViewUrl,
   subprefPolygonStyle,
@@ -72,6 +74,58 @@ function SubprefeiturasLayer() {
         const p = feat?.properties as { sg_subprefeitura?: string } | null | undefined;
         return subprefPolygonStyle(p?.sg_subprefeitura);
       }}
+    />
+  );
+}
+
+/** Camada opcional: eixos de logradouros (`eixos.json`, gerado dos KMLs). Só busca após ligar o checkbox. */
+function EixosLayer({
+  active,
+  isDark,
+  onLoadState,
+}: {
+  active: boolean;
+  isDark: boolean;
+  onLoadState: (s: { loading: boolean; error: string | null }) => void;
+}) {
+  const [data, setData] = useState<SubprefFeatureCollection | null>(null);
+
+  useEffect(() => {
+    if (!active || data) return;
+    let cancelled = false;
+    onLoadState({ loading: true, error: null });
+    fetch(EIXOS_GEOJSON_URL)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((raw: SubprefFeatureCollection & { features?: unknown[] }) => {
+        if (cancelled) return;
+        const fc: SubprefFeatureCollection = {
+          type: "FeatureCollection",
+          features: Array.isArray(raw.features) ? raw.features : [],
+        };
+        setData(fc);
+        onLoadState({ loading: false, error: null });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setData(null);
+          onLoadState({ loading: false, error: "Falha ao carregar os eixos." });
+        }
+      });
+    return () => {
+      cancelled = true;
+      onLoadState({ loading: false, error: null });
+    };
+  }, [active, data, onLoadState]);
+
+  if (!active || !data?.features?.length) return null;
+
+  const lineStyle = eixosLinesStyle(isDark);
+
+  return (
+    <GeoJSON
+      data={data as never}
+      interactive={false}
+      style={() => lineStyle}
     />
   );
 }
@@ -357,6 +411,13 @@ export default function MapaClient({
   const [draftAddressLoading, setDraftAddressLoading] = useState(false);
   const mapRef = useRef<LeafletMap | null>(null);
   const [mapGeoMsg, setMapGeoMsg] = useState<string | null>(null);
+  const [showEixosLayer, setShowEixosLayer] = useState(false);
+  const [eixosOverlayStatus, setEixosOverlayStatus] = useState<{ loading: boolean; error: string | null }>(
+    () => ({ loading: false, error: null }),
+  );
+  const reportEixosLoad = useCallback((s: { loading: boolean; error: string | null }) => {
+    setEixosOverlayStatus(s);
+  }, []);
 
   useEffect(() => {
     if (!notice) return;
@@ -656,6 +717,34 @@ export default function MapaClient({
               <span className="text-base font-bold leading-none">+</span>
               <span>{addMode ? "Cancelar" : "Registrar bueiro"}</span>
             </button>
+            <label className="pointer-events-auto flex max-w-44 cursor-pointer items-start gap-2 rounded-lg border border-cyan-600/40 bg-white/95 px-2.5 py-1.5 text-[11px] font-medium text-zinc-800 shadow-md backdrop-blur-sm dark:border-cyan-500/35 dark:bg-zinc-900/95 dark:text-zinc-100">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-cyan-600 dark:accent-cyan-500"
+                checked={showEixosLayer}
+                onChange={(e) => {
+                  const v = e.target.checked;
+                  setShowEixosLayer(v);
+                  if (!v) setEixosOverlayStatus({ loading: false, error: null });
+                }}
+              />
+              <span className="leading-snug">
+                <span aria-hidden className="mr-1">
+                  🗺️
+                </span>
+                Eixos
+                {eixosOverlayStatus.loading ? (
+                  <span className="mt-0.5 block text-[10px] font-normal text-cyan-700 dark:text-cyan-300">
+                    Carregando…
+                  </span>
+                ) : null}
+                {eixosOverlayStatus.error ? (
+                  <span className="mt-0.5 block text-[10px] font-normal text-red-600 dark:text-red-400">
+                    {eixosOverlayStatus.error}
+                  </span>
+                ) : null}
+              </span>
+            </label>
           </div>
 
           <MapContainer
@@ -669,6 +758,7 @@ export default function MapaClient({
             <IconFix />
             <ThemeTiles dark={isDark} />
             <SubprefeiturasLayer />
+            <EixosLayer active={showEixosLayer} isDark={isDark} onLoadState={reportEixosLoad} />
             <MapClickRouter
               relocateActive={!!relocateId}
               addPickActive={addPickActive}
