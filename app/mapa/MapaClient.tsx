@@ -15,6 +15,7 @@ import {
   EIXOS_GEOJSON_URL,
   SUBPREFS_GEOJSON_URL,
   eixoLineStyle,
+  eixoStatusLabel,
   nearestEixo,
   type EixosCollection,
   bueiroMarkerPathOptions,
@@ -22,7 +23,13 @@ import {
   subprefPolygonStyle,
   tipoLabelBr,
 } from "@/lib/mapa-shared";
-import type { BueiroRegistroDoc, BueiroTipo, SectorCompact } from "@shared/firestore";
+import type { BueiroRegistroDoc, BueiroTipo, SectorCompact, SetorProgressoDoc } from "@shared/firestore";
+import {
+  aggregateBueirosFromRegistros,
+  effectiveRowStatus,
+  type ProgressStatus,
+} from "@shared/setor-status";
+import { finalizarMapaWeb, iniciarMapaWeb } from "@/lib/visita-setor";
 import {
   addDoc,
   collection,
@@ -88,29 +95,37 @@ function EixosLayer({
   active,
   isDark,
   data,
+  rev,
+  statusOf,
+  onPick,
 }: {
   active: boolean;
   isDark: boolean;
   data: EixosCollection | null;
+  rev: number;
+  statusOf: (eixo: string) => ProgressStatus;
+  onPick: (eixo: string) => void;
 }) {
   if (!active || !data?.features?.length) return null;
 
   return (
     <GeoJSON
-      /** `key` força recriar a camada quando o tema muda, recalculando as cores/opacidade. */
-      key={isDark ? "eixos-dark" : "eixos-light"}
+      /** `key` força recriar a camada quando tema, pontos ou progresso mudam. */
+      key={`${isDark ? "eixos-dark" : "eixos-light"}-${rev}`}
       data={data as never}
       style={(feat) => {
         const eixo = (feat?.properties as { eixo?: string } | undefined)?.eixo;
-        return eixoLineStyle(eixo, isDark);
+        const status = eixo ? statusOf(eixo) : "pendente";
+        return eixoLineStyle(eixo, isDark, status);
       }}
       onEachFeature={(feat, layer) => {
         const eixo = (feat?.properties as { eixo?: string } | undefined)?.eixo;
-        if (eixo) {
-          layer.bindPopup(
-            `<div style="font-weight:600">Eixo</div><div>${eixo}</div>`,
-          );
-        }
+        if (!eixo) return;
+        const status = statusOf(eixo);
+        layer.bindPopup(
+          `<div style="font-weight:600">Eixo</div><div>${eixo}</div><div>${eixoStatusLabel(status)}</div>`,
+        );
+        layer.on("click", () => onPick(eixo));
       }}
     />
   );
@@ -397,9 +412,14 @@ export default function MapaClient({
   const [draftAddressLoading, setDraftAddressLoading] = useState(false);
   const mapRef = useRef<LeafletMap | null>(null);
   const [mapGeoMsg, setMapGeoMsg] = useState<string | null>(null);
-  const [showEixosLayer, setShowEixosLayer] = useState(false);
+  const [showEixosLayer, setShowEixosLayer] = useState(true);
   const [eixosData, setEixosData] = useState<EixosCollection | null>(null);
   const [eixosError, setEixosError] = useState<string | null>(null);
+  const [eixoRev, setEixoRev] = useState(0);
+  const [progresso, setProgresso] = useState<Record<string, SetorProgressoDoc>>({});
+  const [selectedEixo, setSelectedEixo] = useState<string | null>(null);
+  const [visitaAtivaId, setVisitaAtivaId] = useState<string | null>(null);
+  const [guiaBusy, setGuiaBusy] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchBusy, setSearchBusy] = useState(false);
@@ -531,10 +551,37 @@ export default function MapaClient({
         list.push({ id: d.id, ...(d.data() as BueiroRegistroDoc) }),
       );
       setRows(list);
+      setEixoRev((n) => n + 1);
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "setores_progresso"), (snap) => {
+      const m: Record<string, SetorProgressoDoc> = {};
+      snap.forEach((d) => {
+        m[d.id] = d.data() as SetorProgressoDoc;
+      });
+      setProgresso(m);
+      setEixoRev((n) => n + 1);
     });
   }, []);
 
   const pathOpts = useMemo(() => bueiroMarkerPathOptions(isDark), [isDark]);
+
+  const bueiroAgg = useMemo(
+    () => aggregateBueirosFromRegistros(rows.map((r) => ({ setor: r.setor, createdAt: r.createdAt }))),
+    [rows],
+  );
+
+  const statusOf = useCallback(
+    (eixo: string): ProgressStatus => {
+      const p = progresso[eixo];
+      return effectiveRowStatus(p?.ultimoStatus ?? "pendente", p?.updatedAt, bueiroAgg[eixo]);
+    },
+    [progresso, bueiroAgg],
+  );
+
+  const selectedStatus: ProgressStatus | null = selectedEixo ? statusOf(selectedEixo) : null;
 
   /** Ponto do rascunho manual desenhado no mapa em tempo real (reflete edições de lat/lng). */
   const draftLatLng = useMemo<[number, number] | null>(() => {
@@ -623,6 +670,10 @@ export default function MapaClient({
       setManualMsg("Selecione o setor.");
       return;
     }
+    if (statusOf(effectiveSetor) === "finalizado") {
+      setManualMsg("Este mapa já foi finalizado.");
+      return;
+    }
     if (manualQtd < 1 || manualQtd > 6 || !Number.isInteger(manualQtd)) {
       setManualMsg("Quantidade inválida (1–6).");
       return;
@@ -639,7 +690,10 @@ export default function MapaClient({
     try {
       const geo = await fetchReverseGeocode(lat, lng);
       await addDoc(collection(db, "bueiros_registros"), {
-        visitaId: `web_${crypto.randomUUID()}`,
+        visitaId:
+          selectedEixo === effectiveSetor && visitaAtivaId
+            ? visitaAtivaId
+            : `web_${crypto.randomUUID()}`,
         setor: effectiveSetor,
         userId,
         tipo: manualTipo,
@@ -652,8 +706,16 @@ export default function MapaClient({
         logradouro: sector?.logradouro,
         enderecoGeocodificado: geo ?? undefined,
       } as BueiroRegistroDoc);
-      setNotice("Registro criado e sincronizado.");
-      resetManualAdd();
+      if (selectedEixo === effectiveSetor && visitaAtivaId) {
+        setManualDraft(null);
+        setManualLatText("");
+        setManualLngText("");
+        setManualMsg(null);
+        setNotice("Registro criado. Clique no próximo ponto.");
+      } else {
+        setNotice("Registro criado e sincronizado.");
+        resetManualAdd();
+      }
     } catch (e) {
       console.error(e);
       setManualMsg("Não foi possível salvar o registro.");
@@ -670,7 +732,54 @@ export default function MapaClient({
     displayName,
     sectors,
     resetManualAdd,
+    statusOf,
+    selectedEixo,
+    visitaAtivaId,
   ]);
+
+  const iniciarSelecionado = useCallback(async () => {
+    if (!selectedEixo || !userId) return;
+    if (statusOf(selectedEixo) === "finalizado") return;
+    setGuiaBusy(true);
+    setManualMsg(null);
+    try {
+      const visitaId = await iniciarMapaWeb(selectedEixo, userId);
+      setVisitaAtivaId(visitaId);
+      setManualSetor(selectedEixo);
+      setRelocateId(null);
+      setAddMode(true);
+      setNotice(
+        statusOf(selectedEixo) === "em_execucao"
+          ? "Mapa em execução. Continue de onde parou."
+          : "Mapa iniciado.",
+      );
+    } catch (e) {
+      console.error(e);
+      setManualMsg("Não foi possível iniciar este mapa.");
+    } finally {
+      setGuiaBusy(false);
+    }
+  }, [selectedEixo, userId, statusOf]);
+
+  const finalizarSelecionado = useCallback(async () => {
+    if (!selectedEixo || !userId) return;
+    if (statusOf(selectedEixo) !== "em_execucao") return;
+    const ok = window.confirm(`Finalizar o mapa ${selectedEixo}?`);
+    if (!ok) return;
+    setGuiaBusy(true);
+    setManualMsg(null);
+    try {
+      await finalizarMapaWeb(selectedEixo, userId);
+      setVisitaAtivaId(null);
+      setAddMode(false);
+      setNotice("Mapa finalizado.");
+    } catch (e) {
+      console.error(e);
+      setManualMsg("Não foi possível finalizar este mapa.");
+    } finally {
+      setGuiaBusy(false);
+    }
+  }, [selectedEixo, userId, statusOf]);
 
   const addPickActive = addMode && !manualDraft && !relocateId;
 
@@ -692,6 +801,13 @@ export default function MapaClient({
     },
     [],
   );
+
+  const pickEixo = useCallback((eixo: string) => {
+    setSelectedEixo(eixo);
+    setVisitaAtivaId(null);
+    setShowEixosLayer(true);
+    setManualMsg(null);
+  }, []);
 
   const flyToDefaultView = useCallback(() => {
     setMapGeoMsg(null);
@@ -823,6 +939,58 @@ export default function MapaClient({
             ) : null}
           </div>
 
+          {selectedEixo && selectedStatus ? (
+            <div className="pointer-events-auto absolute bottom-8 left-1/2 z-1000 w-[min(24rem,calc(100%-1rem))] -translate-x-1/2 rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-xs shadow-md backdrop-blur-sm dark:border-zinc-700 dark:bg-zinc-900/95">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-zinc-900 dark:text-zinc-100">{selectedEixo}</div>
+                  <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                    {eixoStatusLabel(selectedStatus)}
+                    {bueiroAgg[selectedEixo]?.count
+                      ? ` · ${bueiroAgg[selectedEixo].count} ponto(s)`
+                      : ""}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                  aria-label="Fechar mapa selecionado"
+                  onClick={() => setSelectedEixo(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="mt-2 flex gap-2">
+                {selectedStatus === "finalizado" ? (
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Este mapa já foi finalizado. O cadastro fica fechado.
+                  </p>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={guiaBusy}
+                      onClick={() => void iniciarSelecionado()}
+                      className="rounded-lg bg-cyan-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
+                    >
+                      {selectedStatus === "em_execucao" ? "Continuar" : "Iniciar"}
+                    </button>
+                    {selectedStatus === "em_execucao" ? (
+                      <button
+                        type="button"
+                        disabled={guiaBusy}
+                        onClick={() => void finalizarSelecionado()}
+                        className="rounded-lg border border-zinc-300 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                      >
+                        Finalizar
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </div>
+          ) : null}
+
           <div className="pointer-events-none absolute bottom-8 right-2 z-1000">
             <button
               type="button"
@@ -869,6 +1037,13 @@ export default function MapaClient({
             <div className="rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1 text-[11px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
               {rows.length} pontos registrados
             </div>
+            {showEixosLayer ? (
+              <div className="rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1.5 text-[10px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
+                <div>Fino: sem execução</div>
+                <div>Grosso pontilhado: em execução</div>
+                <div>Grosso: concluído</div>
+              </div>
+            ) : null}
           </div>
 
           <div className="pointer-events-none absolute top-2 right-2 z-1000 flex flex-col items-end gap-2">
@@ -940,7 +1115,14 @@ export default function MapaClient({
             <IconFix />
             <ThemeTiles dark={isDark} basemap={basemap} />
             <SubprefeiturasLayer />
-            <EixosLayer active={showEixosLayer} isDark={isDark} data={eixosData} />
+            <EixosLayer
+              active={showEixosLayer}
+              isDark={isDark}
+              data={eixosData}
+              rev={eixoRev}
+              statusOf={statusOf}
+              onPick={pickEixo}
+            />
             <MapClickRouter
               relocateActive={!!relocateId}
               addPickActive={addPickActive}

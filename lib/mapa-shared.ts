@@ -1,4 +1,5 @@
 import type { BueiroTipo } from "@shared/firestore";
+import type { ProgressStatus } from "@shared/setor-status";
 
 /** Subconjunto compatível com `pathOptions` do Leaflet. */
 export type MapPathStyle = {
@@ -7,6 +8,7 @@ export type MapPathStyle = {
   fillOpacity?: number;
   weight?: number;
   opacity?: number;
+  dashArray?: string;
 };
 
 export const DEFAULT_MAP_CENTER: [number, number] = [-23.488481, -46.609392];
@@ -28,19 +30,62 @@ export const EIXO_SUB_COLORS: Record<string, string> = {
   ST: "#eab308", // amarelo
 };
 
-/** Cor do eixo a partir do nome do mapa; cinza para subs desconhecidas. */
+/** Quatro tons estáveis por sub, para mapas vizinhos não colarem um no outro. */
+const EIXO_SUB_TONES: Record<string, readonly [string, string, string, string]> = {
+  CV: ["#3f6212", "#65a30d", "#84cc16", "#4d7c0f"],
+  JT: ["#1e3a8a", "#312e81", "#5b21b6", "#6d28d9"],
+  MG: ["#0e7490", "#0891b2", "#06b6d4", "#155e75"],
+  ST: ["#a16207", "#ca8a04", "#eab308", "#facc15"],
+};
+
+/** Cor base da sub; cinza para subs desconhecidas. */
 export function eixoSubColor(eixo: string | undefined): string {
   const sub = (eixo ?? "").slice(0, 2).toUpperCase();
   return EIXO_SUB_COLORS[sub] ?? "#6b7280";
 }
 
-/** Estilo de uma linha de eixo, colorida pela subprefeitura. */
-export function eixoLineStyle(eixo: string | undefined, isDark: boolean): MapPathStyle {
+function eixoToneIndex(eixo: string): number {
+  let h = 0;
+  for (let i = 0; i < eixo.length; i++) h = (h * 31 + eixo.charCodeAt(i)) >>> 0;
+  return h % 4;
+}
+
+/** Tom do mapa dentro da família da sub. O mesmo código sempre cai no mesmo tom. */
+export function eixoToneColor(eixo: string | undefined): string {
+  const name = (eixo ?? "").trim();
+  const sub = name.slice(0, 2).toUpperCase();
+  const tones = EIXO_SUB_TONES[sub];
+  if (!tones || !name) return eixoSubColor(eixo);
+  return tones[eixoToneIndex(name)];
+}
+
+/**
+ * Linha do eixo: tom da sub + status efetivo.
+ * Pendente fica fino, em execução grosso e pontilhado, finalizado grosso e contínuo.
+ */
+export function eixoLineStyle(
+  eixo: string | undefined,
+  isDark: boolean,
+  status: ProgressStatus = "pendente",
+): MapPathStyle {
+  const color = eixoToneColor(eixo);
+  if (status === "finalizado") {
+    return { color, weight: 5.4, opacity: 1 };
+  }
+  if (status === "em_execucao") {
+    return { color, weight: 5.4, opacity: 1, dashArray: "10 8" };
+  }
   return {
-    color: eixoSubColor(eixo),
-    weight: 3.1,
-    opacity: isDark ? 0.9 : 0.85,
+    color,
+    weight: 2.2,
+    opacity: isDark ? 0.7 : 0.75,
   };
+}
+
+export function eixoStatusLabel(status: ProgressStatus): string {
+  if (status === "em_execucao") return "Em execução";
+  if (status === "finalizado") return "Finalizado";
+  return "Pendente";
 }
 
 export type EixoFeature = {
