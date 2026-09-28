@@ -1,6 +1,6 @@
 "use client";
 
-import { IconFix, ThemeTiles } from "@/app/components/map/MapLeafletCommons";
+import { IconFix, MAP_MAX_ZOOM, ThemeTiles } from "@/app/components/map/MapLeafletCommons";
 import { db } from "@/lib/firebase";
 import { QuantidadeSelect } from "@/app/components/QuantidadeSelect";
 import { SectorCombobox } from "@/app/components/SectorCombobox";
@@ -407,6 +407,28 @@ export default function MapaClient({
   const [searchResult, setSearchResult] = useState<
     { lat: number; lng: number; address: string | null } | null
   >(null);
+  const [basemap, setBasemap] = useState<"google" | "osm">("google");
+  const [satelliteReady, setSatelliteReady] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/map-tiles/session")
+      .then((res) => res.json())
+      .then((data: { ok?: boolean }) => {
+        if (cancelled) return;
+        const ok = !!data.ok;
+        setSatelliteReady(ok);
+        if (!ok) setBasemap("osm");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSatelliteReady(false);
+        setBasemap("osm");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!notice) return;
@@ -712,7 +734,7 @@ export default function MapaClient({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
+      <div className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden">
           <div className="pointer-events-none absolute top-2 right-31 left-2 z-800 flex max-h-[45%] flex-col gap-2 overflow-hidden sm:right-32">
             <form
               className="pointer-events-auto flex w-1/2 min-w-[150px] items-stretch gap-1.5"
@@ -801,6 +823,32 @@ export default function MapaClient({
             ) : null}
           </div>
 
+          <div className="pointer-events-none absolute bottom-8 right-2 z-1000">
+            <button
+              type="button"
+              aria-pressed={basemap === "google"}
+              disabled={satelliteReady === false}
+              title={
+                satelliteReady === false
+                  ? "Satélite Google indisponível. Mapa no OpenStreetMap."
+                  : basemap === "google"
+                    ? "Satélite Google. Clique para OpenStreetMap."
+                    : "OpenStreetMap. Clique para satélite Google."
+              }
+              aria-label={
+                basemap === "google" ? "Usar OpenStreetMap" : "Usar satélite Google"
+              }
+              onClick={() => setBasemap((current) => (current === "google" ? "osm" : "google"))}
+              className={`pointer-events-auto flex h-9 w-9 items-center justify-center rounded-lg border text-lg shadow-md backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                basemap === "google"
+                  ? "border-cyan-600 bg-cyan-600/95"
+                  : "border-zinc-300 bg-white/95 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900/95 dark:hover:bg-zinc-800"
+              }`}
+            >
+              <span aria-hidden>🛰️</span>
+            </button>
+          </div>
+
           <div className="pointer-events-none absolute bottom-2 left-2 z-800 flex flex-col gap-1.5">
             {showEixosLayer ? (
               <div className="rounded-md border border-zinc-200/80 bg-white/90 px-2 py-1.5 text-[10px] text-zinc-700 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-200">
@@ -880,6 +928,7 @@ export default function MapaClient({
           <MapContainer
             center={DEFAULT_MAP_CENTER}
             zoom={DEFAULT_MAP_ZOOM}
+            maxZoom={MAP_MAX_ZOOM}
             zoomControl={false}
             className={`h-full min-h-0 w-full flex-1 touch-manipulation ${
               addPickActive ? "cursor-pick" : ""
@@ -889,7 +938,7 @@ export default function MapaClient({
             <MapInstanceBridge mapRef={mapRef} />
             <MapResizeSync />
             <IconFix />
-            <ThemeTiles dark={isDark} />
+            <ThemeTiles dark={isDark} basemap={basemap} />
             <SubprefeiturasLayer />
             <EixosLayer active={showEixosLayer} isDark={isDark} data={eixosData} />
             <MapClickRouter

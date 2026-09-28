@@ -1,6 +1,6 @@
 "use client";
 
-import { IconFix, ThemeTiles } from "@/app/components/map/MapLeafletCommons";
+import { IconFix, MAP_MAX_ZOOM, ThemeTiles } from "@/app/components/map/MapLeafletCommons";
 import L from "leaflet";
 import { useMemo } from "react";
 import { MapContainer, Marker, useMapEvents } from "react-leaflet";
@@ -55,6 +55,7 @@ export default function SetorMiniMapInner({
     <MapContainer
       center={[lat, lng]}
       zoom={17}
+      maxZoom={MAP_MAX_ZOOM}
       className="h-[220px] w-full overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-700"
       scrollWheelZoom
     >
