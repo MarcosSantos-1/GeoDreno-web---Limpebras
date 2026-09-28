@@ -20,18 +20,24 @@ export function IconFix() {
 }
 
 export function ThemeTiles({ dark }: { dark: boolean }) {
-  const url = dark
-    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-    : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
   const map = useMap();
   useEffect(() => {
     map.invalidateSize();
+    const pane = map.getPane("tilePane");
+    if (pane) {
+      pane.style.filter = dark
+        ? "invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.95)"
+        : "";
+    }
+    return () => {
+      if (pane) pane.style.filter = "";
+    };
   }, [dark, map]);
   return (
     <TileLayer
-      key={dark ? "dark" : "light"}
-      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/attributions">CARTO</a>'
-      url={url}
+      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+      maxZoom={19}
     />
   );
 }
